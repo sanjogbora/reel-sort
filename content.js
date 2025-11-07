@@ -378,41 +378,10 @@
     });
 
     console.log('[Reels Sorter] ✅ DOM reordered successfully');
-
-    // Add visual indicators to top 3 reels
-    reelContainers.slice(0, 3).forEach((item, index) => {
-      const badge = document.createElement('div');
-      badge.textContent = ['🥇', '🥈', '🥉'][index];
-      badge.className = 'sort-medal';
-      badge.style.cssText = `
-        position: absolute;
-        top: 8px;
-        left: 8px;
-        z-index: 1000;
-        font-size: 28px;
-        background: rgba(0,0,0,0.8);
-        border-radius: 50%;
-        width: 40px;
-        height: 40px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.5);
-      `;
-
-      // Find the link container and make it relative
-      const linkContainer = item.element.querySelector('a[href*="/reel/"]');
-      if (linkContainer) {
-        linkContainer.style.position = 'relative';
-        linkContainer.appendChild(badge);
-      }
-    });
-
-    console.log('[Reels Sorter] ✅ Medals added!');
     console.log('[Reels Sorter] Top 3 reels:');
-    console.log('🥇', reelContainers[0].views, 'views -', reelContainers[0].viewsText);
-    console.log('🥈', reelContainers[1].views, 'views -', reelContainers[1].viewsText);
-    console.log('🥉', reelContainers[2].views, 'views -', reelContainers[2].viewsText);
+    console.log('#1:', reelContainers[0].views, 'views -', reelContainers[0].viewsText);
+    console.log('#2:', reelContainers[1].views, 'views -', reelContainers[1].viewsText);
+    console.log('#3:', reelContainers[2].views, 'views -', reelContainers[2].viewsText);
 
     showNotification(`✅ Sorted ${reelContainers.length} reels by views!`);
   }
