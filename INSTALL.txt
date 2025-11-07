@@ -1,0 +1,113 @@
+═══════════════════════════════════════════════════════════════
+  INSTAGRAM REELS SORTER - INSTALLATION GUIDE
+═══════════════════════════════════════════════════════════════
+
+📦 WHAT YOU HAVE
+────────────────
+A Chrome extension that sorts Instagram Reels by view count.
+Works on profile pages, supports multiple tabs simultaneously.
+
+⚡ QUICK INSTALL (2 minutes)
+────────────────────────────
+1. Open Google Chrome
+2. Type in address bar: chrome://extensions/
+3. Turn ON "Developer mode" (toggle in top-right corner)
+4. Click "Load unpacked" button
+5. Select THIS folder (the one containing these files)
+6. Done! Extension is now installed
+
+✅ VERIFY INSTALLATION
+───────────────────────
+- Extension icon should appear in Chrome toolbar
+- Extension should be listed in chrome://extensions/
+- Status should show "Enabled"
+
+🎯 FIRST TEST (1 minute)
+────────────────────────
+1. Go to: https://www.instagram.com/instagram/
+2. Wait for page to fully load
+3. Look for "📊 Sort by Views" button (top-right corner)
+4. Click it
+5. Watch the magic! Page will auto-scroll and sort reels
+
+🚀 HOW TO USE
+─────────────
+
+METHOD 1: In-Page Button (Easiest)
+  • Visit any Instagram profile
+  • Click the floating "📊 Sort by Views" button
+  • Reels sort automatically
+
+METHOD 2: Extension Popup
+  • Click extension icon in toolbar
+  • Choose "Sort Current Tab" or "Sort All Instagram Tabs"
+  • Watch sorting happen
+
+METHOD 3: Multiple Tabs
+  • Open several Instagram profiles in different tabs
+  • Click extension icon
+  • Click "Sort All Instagram Tabs"
+  • All tabs sort simultaneously
+
+💡 TIPS
+───────
+• Best profiles to test: @instagram, @natgeo, @nike, @redbull
+• Works only on profile pages (not home feed or explore)
+• Can sort 50-100 reels per profile
+• All processing happens locally (privacy-friendly)
+• No Instagram account required
+
+❓ TROUBLESHOOTING
+──────────────────
+
+Button doesn't appear?
+  → Refresh the page
+  → Wait 2-3 seconds after page loads
+  → Make sure you're on a profile page
+
+No reels found?
+  → Profile might not have public reels
+  → Try a different profile
+  → Manually scroll down first
+
+Sorting doesn't work?
+  → Check browser console (F12) for errors
+  → Instagram may have changed their layout
+  → Try refreshing and sorting again
+
+Extension not loading?
+  → Make sure Developer mode is ON
+  → Check that you selected the correct folder
+  → Look for error messages in chrome://extensions/
+
+📚 MORE HELP
+────────────
+• QUICKSTART.md - 5-minute setup guide
+• README.md - Full documentation
+• TESTING.md - Detailed testing guide
+• FEATURES.md - Technical details
+
+🔧 UNINSTALL
+────────────
+1. Go to chrome://extensions/
+2. Find "Instagram Reels Sorter"
+3. Click "Remove"
+4. Confirm removal
+
+📝 FILES INCLUDED
+─────────────────
+manifest.json       - Extension configuration
+content.js          - Main sorting logic
+background.js       - Multi-tab coordinator
+popup.html/js       - Extension popup UI
+icon*.png           - Extension icons
+*.md files          - Documentation
+
+🎉 YOU'RE READY!
+────────────────
+Extension is installed and ready to use.
+Go sort some Instagram Reels!
+
+═══════════════════════════════════════════════════════════════
+Need help? Check the documentation files or browser console.
+═══════════════════════════════════════════════════════════════
