@@ -92,16 +92,34 @@
 
       const url = link.href;
 
-      // Extract thumbnail image
+      // Extract thumbnail image (find the actual img element)
       let thumbnail = '';
-      const img = element.querySelector('img');
-      if (img && img.src) {
-        thumbnail = img.src;
+      const imgs = element.querySelectorAll('img');
+      for (const img of imgs) {
+        if (img.src && !img.src.includes('profile') && img.src.includes('https://')) {
+          thumbnail = img.src;
+          break;
+        }
       }
 
-      // Try multiple methods to find views
+      // Try multiple methods to find views, likes, comments
       let viewsText = '';
       let views = 0;
+      let likesText = '';
+      let likes = 0;
+      let commentsText = '';
+      let comments = 0;
+
+      // Collect all text content
+      const allSpans = element.querySelectorAll('span, div');
+      const textContents = [];
+
+      for (const el of allSpans) {
+        const text = el.textContent.trim();
+        if (text && text.length < 20) { // Reasonable length for stats
+          textContents.push(text);
+        }
+      }
 
       // Method 1: Look for SVG icon followed by text (Instagram's current structure)
       const svgParents = element.querySelectorAll('svg');
@@ -113,53 +131,64 @@
             const text = nextSibling.textContent.trim();
             // Check if it's a number with K/M/B suffix
             if (text.match(/^[\d,.]+[KMB]?$/i)) {
-              viewsText = text;
-              views = parseViewCount(text);
-              break;
+              const parsedValue = parseViewCount(text);
+
+              // Heuristic: largest number is likely views, smaller ones are likes/comments
+              if (parsedValue > views) {
+                // Shift current views to likes if new value is larger
+                if (views > 0) {
+                  if (likes === 0) {
+                    likes = views;
+                    likesText = viewsText;
+                  }
+                }
+                views = parsedValue;
+                viewsText = text;
+              } else if (parsedValue > likes) {
+                if (likes > 0 && comments === 0) {
+                  comments = likes;
+                  commentsText = likesText;
+                }
+                likes = parsedValue;
+                likesText = text;
+              } else if (parsedValue > comments) {
+                comments = parsedValue;
+                commentsText = text;
+              }
             }
           }
         }
       }
 
-      // Method 2: Search all text nodes for numbers (most reliable)
+      // Method 2: Search all text nodes for numbers
       if (!viewsText) {
-        const allSpans = element.querySelectorAll('span, div');
         let maxViews = 0;
+        const numbers = [];
 
         for (const el of allSpans) {
           const text = el.textContent.trim();
           // Match patterns like "7,125" or "5.5K" or "1.2M" (exactly, no extra text)
           if (text.match(/^[\d,]+$/) || text.match(/^[\d,.]+[KMB]$/i)) {
-            const parsedViews = parseViewCount(text);
-            // Take the highest number found (likely the view count)
-            if (parsedViews > maxViews) {
-              maxViews = parsedViews;
-              viewsText = text;
-              views = parsedViews;
-            }
-          }
-          // Also try with "views" text
-          if (text.match(/[\d,.]+[KMB]?\s*(views?|Views?)/i)) {
-            const parsedViews = parseViewCount(text);
-            if (parsedViews > maxViews) {
-              maxViews = parsedViews;
-              viewsText = text;
-              views = parsedViews;
-            }
+            const parsedValue = parseViewCount(text);
+            numbers.push({ value: parsedValue, text: text });
           }
         }
-      }
 
-      // Method 3: Check aria-labels
-      if (!viewsText) {
-        const ariaElements = element.querySelectorAll('[aria-label]');
-        for (const el of ariaElements) {
-          const label = el.getAttribute('aria-label');
-          if (label && label.toLowerCase().includes('views')) {
-            viewsText = label;
-            views = parseViewCount(label);
-            break;
-          }
+        // Sort by value descending
+        numbers.sort((a, b) => b.value - a.value);
+
+        // Assign: largest = views, second = likes, third = comments
+        if (numbers.length > 0) {
+          views = numbers[0].value;
+          viewsText = numbers[0].text;
+        }
+        if (numbers.length > 1) {
+          likes = numbers[1].value;
+          likesText = numbers[1].text;
+        }
+        if (numbers.length > 2) {
+          comments = numbers[2].value;
+          commentsText = numbers[2].text;
         }
       }
 
@@ -167,6 +196,10 @@
         url: url,
         views: views,
         viewsText: viewsText,
+        likes: likes,
+        likesText: likesText,
+        comments: comments,
+        commentsText: commentsText,
         thumbnail: thumbnail
       };
     } catch (error) {
@@ -326,7 +359,7 @@
     });
   }
 
-  // Create Instagram-like overlay with sorted reels
+  // Inject sorted reels into Instagram's feed area
   function sortReelsByViews() {
     if (reelsData.length === 0) {
       showNotification('No reels found to sort');
@@ -343,73 +376,78 @@
       viewsText: r.viewsText
     })));
 
-    // Create full-screen overlay
-    const overlay = document.createElement('div');
-    overlay.id = 'reels-sorter-overlay';
-    overlay.style.cssText = `
-      position: fixed;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      background: rgb(0, 0, 0);
-      z-index: 99999;
-      overflow-y: auto;
-      overflow-x: hidden;
+    // Find Instagram's main content container
+    const mainContent = document.querySelector('main') || document.querySelector('[role="main"]');
+    if (!mainContent) {
+      console.log('[Reels Sorter] Could not find main content area');
+      showNotification('Could not find Instagram content area');
+      return;
+    }
+
+    // Hide original content
+    const originalContent = mainContent.innerHTML;
+    mainContent.dataset.originalContent = originalContent;
+
+    // Create our sorted grid container
+    const container = document.createElement('div');
+    container.id = 'reels-sorter-grid';
+    container.style.cssText = `
+      max-width: 975px;
+      margin: 0 auto;
+      padding: 30px 20px;
     `;
 
-    // Create header (like Instagram's)
+    // Add header with close button
     const header = document.createElement('div');
     header.style.cssText = `
-      position: sticky;
-      top: 0;
-      background: rgb(0, 0, 0);
-      border-bottom: 1px solid rgb(38, 38, 38);
-      padding: 16px 20px;
       display: flex;
       justify-content: space-between;
       align-items: center;
-      z-index: 100000;
+      margin-bottom: 28px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid rgb(38, 38, 38);
     `;
 
     const title = document.createElement('h2');
     title.textContent = `Sorted by Views (${sortedReels.length} reels)`;
     title.style.cssText = `
-      color: rgb(255, 255, 255);
-      font-size: 16px;
+      color: rgb(var(--ig-primary-text, 0, 0, 0));
+      font-size: 14px;
       font-weight: 600;
       margin: 0;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     `;
 
     const closeBtn = document.createElement('button');
-    closeBtn.textContent = '✕';
+    closeBtn.textContent = 'Show Original';
     closeBtn.style.cssText = `
       background: transparent;
-      border: none;
-      color: rgb(255, 255, 255);
-      font-size: 24px;
+      border: 1px solid rgb(var(--ig-secondary-button-background, 219, 219, 219));
+      color: rgb(var(--ig-primary-text, 0, 0, 0));
+      font-size: 14px;
+      font-weight: 600;
       cursor: pointer;
-      padding: 4px 12px;
-      border-radius: 4px;
-      transition: background 0.2s;
+      padding: 7px 16px;
+      border-radius: 8px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      transition: all 0.2s;
     `;
-    closeBtn.onmouseover = () => closeBtn.style.background = 'rgba(255,255,255,0.1)';
-    closeBtn.onmouseout = () => closeBtn.style.background = 'transparent';
-    closeBtn.onclick = () => overlay.remove();
+    closeBtn.onmouseover = () => {
+      closeBtn.style.background = 'rgba(var(--ig-secondary-button-background, 219, 219, 219), 0.1)';
+    };
+    closeBtn.onmouseout = () => {
+      closeBtn.style.background = 'transparent';
+    };
+    closeBtn.onclick = () => {
+      mainContent.innerHTML = mainContent.dataset.originalContent;
+      delete mainContent.dataset.originalContent;
+    };
 
     header.appendChild(title);
     header.appendChild(closeBtn);
-    overlay.appendChild(header);
+    container.appendChild(header);
 
-    // Create grid container (Instagram uses 3 columns on desktop)
-    const gridContainer = document.createElement('div');
-    gridContainer.style.cssText = `
-      max-width: 975px;
-      margin: 0 auto;
-      padding: 20px;
-    `;
-
+    // Create grid (3 columns, matching Instagram)
     const grid = document.createElement('div');
     grid.style.cssText = `
       display: grid;
@@ -421,13 +459,12 @@
     sortedReels.forEach((reel, index) => {
       const item = document.createElement('a');
       item.href = reel.url;
-      item.target = '_self';
       item.style.cssText = `
         position: relative;
         display: block;
-        aspect-ratio: 1;
+        aspect-ratio: 4/5;
         overflow: hidden;
-        background: rgb(38, 38, 38);
+        background: rgb(239, 239, 239);
         cursor: pointer;
         text-decoration: none;
       `;
@@ -445,52 +482,52 @@
         item.appendChild(img);
       }
 
-      // Add view count overlay (always visible)
+      // Add reel icon (top right - indicates it's a video)
+      const reelIcon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      reelIcon.setAttribute('width', '18');
+      reelIcon.setAttribute('height', '18');
+      reelIcon.setAttribute('viewBox', '0 0 24 24');
+      reelIcon.setAttribute('fill', 'white');
+      reelIcon.innerHTML = '<path d="m12.823 1 2.974 5.002h-5.58l-2.65-4.971c.206-.013.419-.022.642-.027L8.55 1Zm2.327 0h.298c3.06 0 4.468.754 5.64 1.887a6.007 6.007 0 0 1 1.596 2.82l.07.295h-4.629L15.15 1Zm-9.667.377L7.95 6.002H1.244a6.01 6.01 0 0 1 3.942-4.53Zm9.735 12.834-4.545-2.624a.909.909 0 0 0-1.356.668l-.008.12v5.248a.91.91 0 0 0 1.255.84l.109-.053 4.545-2.624a.909.909 0 0 0 .1-1.507l-.1-.068-4.545-2.624Zm-14.2-6.209h21.964l.015.36.003.189v6.899c0 3.061-.755 4.469-1.888 5.64-1.151 1.114-2.5 1.856-5.33 1.909l-.334.003H8.551c-3.06 0-4.467-.755-5.64-1.889-1.114-1.15-1.854-2.498-1.908-5.33L1 15.45V8.551l.003-.189Z"></path>';
+      reelIcon.style.cssText = `
+        position: absolute;
+        top: 8px;
+        right: 8px;
+        filter: drop-shadow(0 1px 2px rgba(0,0,0,0.6));
+      `;
+      item.appendChild(reelIcon);
+
+      // Add view count badge (bottom left)
       const viewBadge = document.createElement('div');
       viewBadge.style.cssText = `
         position: absolute;
         bottom: 8px;
         left: 8px;
-        background: rgba(0, 0, 0, 0.7);
         color: white;
-        padding: 4px 8px;
-        border-radius: 4px;
-        font-size: 12px;
+        font-size: 14px;
         font-weight: 600;
         display: flex;
         align-items: center;
         gap: 4px;
+        text-shadow: 0 1px 2px rgba(0,0,0,0.6);
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
       `;
 
-      // Add play icon SVG (like Instagram)
+      // Add play icon
       const playIcon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-      playIcon.setAttribute('width', '12');
-      playIcon.setAttribute('height', '12');
+      playIcon.setAttribute('width', '14');
+      playIcon.setAttribute('height', '14');
       playIcon.setAttribute('viewBox', '0 0 24 24');
       playIcon.setAttribute('fill', 'white');
-      playIcon.innerHTML = '<path d="M5.888 22.5a3.46 3.46 0 0 1-1.721-.46l-.003-.002a3.451 3.451 0 0 1-1.72-2.982V4.943a3.445 3.445 0 0 1 5.163-2.987l12.226 7.059a3.444 3.444 0 0 1-.001 5.967l-12.22 7.056a3.462 3.462 0 0 1-1.724.462Z"></path>';
+      playIcon.innerHTML = '<polygon points="5 3 19 12 5 21 5 3"></polygon>';
+      playIcon.style.cssText = 'filter: drop-shadow(0 1px 2px rgba(0,0,0,0.6));';
 
       viewBadge.appendChild(playIcon);
       viewBadge.appendChild(document.createTextNode(reel.viewsText || reel.views.toLocaleString()));
 
       item.appendChild(viewBadge);
 
-      // Add rank badge for top 3
-      if (index < 3) {
-        const rankBadge = document.createElement('div');
-        rankBadge.textContent = ['🥇', '🥈', '🥉'][index];
-        rankBadge.style.cssText = `
-          position: absolute;
-          top: 8px;
-          right: 8px;
-          font-size: 24px;
-          text-shadow: 0 2px 4px rgba(0,0,0,0.8);
-        `;
-        item.appendChild(rankBadge);
-      }
-
-      // Hover effect overlay
+      // Hover overlay with stats
       const hoverOverlay = document.createElement('div');
       hoverOverlay.style.cssText = `
         position: absolute;
@@ -498,28 +535,83 @@
         left: 0;
         right: 0;
         bottom: 0;
-        background: rgba(0, 0, 0, 0);
-        transition: background 0.2s;
+        background: rgba(0, 0, 0, 0.3);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 16px;
+        opacity: 0;
+        transition: opacity 0.2s;
         pointer-events: none;
+        color: white;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
       `;
+
+      // Add likes stat
+      if (reel.likes > 0) {
+        const likesStat = document.createElement('div');
+        likesStat.style.cssText = `
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          font-size: 16px;
+          font-weight: 600;
+        `;
+
+        const heartIcon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        heartIcon.setAttribute('width', '19');
+        heartIcon.setAttribute('height', '19');
+        heartIcon.setAttribute('viewBox', '0 0 48 48');
+        heartIcon.setAttribute('fill', 'white');
+        heartIcon.innerHTML = '<path d="M34.6 3.1c-4.5 0-7.9 1.8-10.6 5.6-2.7-3.7-6.1-5.5-10.6-5.5C6 3.1 0 9.6 0 17.6c0 7.3 5.4 12 10.6 16.5.6.5 1.3 1.1 1.9 1.7l2.3 2c4.4 3.9 6.6 5.9 7.6 6.5.5.3 1.1.5 1.6.5s1.1-.2 1.6-.5c1-.6 2.8-2.2 7.8-6.8l2-1.8c.7-.6 1.3-1.2 2-1.7C42.7 29.6 48 25 48 17.6c0-8-6-14.5-13.4-14.5z"></path>';
+
+        likesStat.appendChild(heartIcon);
+        likesStat.appendChild(document.createTextNode(reel.likesText || reel.likes.toLocaleString()));
+        hoverOverlay.appendChild(likesStat);
+      }
+
+      // Add comments stat
+      if (reel.comments > 0) {
+        const commentsStat = document.createElement('div');
+        commentsStat.style.cssText = `
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          font-size: 16px;
+          font-weight: 600;
+        `;
+
+        const commentIcon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        commentIcon.setAttribute('width', '19');
+        commentIcon.setAttribute('height', '19');
+        commentIcon.setAttribute('viewBox', '0 0 48 48');
+        commentIcon.setAttribute('fill', 'white');
+        commentIcon.innerHTML = '<path d="M47.5 46.1l-2.8-11c1.8-3.3 2.8-7.1 2.8-11.1C47.5 11 37 .5 24 .5S.5 11 .5 24 11 47.5 24 47.5c4 0 7.8-1 11.1-2.8l11 2.8c.8.2 1.6-.6 1.4-1.4zm-3-22.1c0 4-1 7-2.6 10-.2.4-.3.9-.2 1.4l2.1 8.4-8.3-2.1c-.5-.1-1-.1-1.4.2-1.8 1-5.2 2.6-10 2.6-11.4 0-20.6-9.2-20.6-20.5S12.7 3.5 24 3.5 44.5 12.7 44.5 24z"></path>';
+
+        commentsStat.appendChild(commentIcon);
+        commentsStat.appendChild(document.createTextNode(reel.commentsText || reel.comments.toLocaleString()));
+        hoverOverlay.appendChild(commentsStat);
+      }
+
       item.appendChild(hoverOverlay);
 
-      item.onmouseover = () => hoverOverlay.style.background = 'rgba(0, 0, 0, 0.3)';
-      item.onmouseout = () => hoverOverlay.style.background = 'rgba(0, 0, 0, 0)';
+      item.onmouseenter = () => {
+        hoverOverlay.style.opacity = '1';
+      };
+      item.onmouseleave = () => {
+        hoverOverlay.style.opacity = '0';
+      };
 
       grid.appendChild(item);
     });
 
-    gridContainer.appendChild(grid);
-    overlay.appendChild(gridContainer);
+    container.appendChild(grid);
 
-    // Add to page
-    document.body.appendChild(overlay);
+    // Replace main content
+    mainContent.innerHTML = '';
+    mainContent.appendChild(container);
 
-    // Scroll to top of overlay
-    overlay.scrollTop = 0;
-
-    console.log('[Reels Sorter] ✅ Overlay created with', sortedReels.length, 'sorted reels');
+    console.log('[Reels Sorter] ✅ Injected', sortedReels.length, 'sorted reels into feed');
   }
 
   // Show notification
