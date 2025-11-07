@@ -92,6 +92,13 @@
 
       const url = link.href;
 
+      // Extract thumbnail image
+      let thumbnail = '';
+      const img = element.querySelector('img');
+      if (img && img.src) {
+        thumbnail = img.src;
+      }
+
       // Try multiple methods to find views
       let viewsText = '';
       let views = 0;
@@ -156,19 +163,88 @@
         }
       }
 
-      // DON'T store element reference - it will become stale!
       return {
         url: url,
         views: views,
-        viewsText: viewsText
+        viewsText: viewsText,
+        thumbnail: thumbnail
       };
     } catch (error) {
       return null;
     }
   }
 
+  // Show loading overlay during collection
+  function showLoadingOverlay() {
+    const overlay = document.createElement('div');
+    overlay.id = 'reels-sorter-loading';
+    overlay.style.cssText = `
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.8);
+      z-index: 99998;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 20px;
+    `;
+
+    const spinner = document.createElement('div');
+    spinner.style.cssText = `
+      width: 50px;
+      height: 50px;
+      border: 4px solid rgba(255, 255, 255, 0.3);
+      border-top-color: white;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    `;
+
+    const text = document.createElement('div');
+    text.id = 'loading-text';
+    text.style.cssText = `
+      color: white;
+      font-size: 16px;
+      font-weight: 500;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    `;
+    text.textContent = 'Collecting reels...';
+
+    const count = document.createElement('div');
+    count.id = 'loading-count';
+    count.style.cssText = `
+      color: rgba(255, 255, 255, 0.7);
+      font-size: 14px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    `;
+    count.textContent = '0 reels found';
+
+    // Add CSS animation
+    const style = document.createElement('style');
+    style.textContent = `
+      @keyframes spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+      }
+    `;
+    document.head.appendChild(style);
+
+    overlay.appendChild(spinner);
+    overlay.appendChild(text);
+    overlay.appendChild(count);
+    document.body.appendChild(overlay);
+
+    return overlay;
+  }
+
   // Auto-scroll and collect reels
   async function autoScrollAndCollect() {
+    const loadingOverlay = showLoadingOverlay();
+    const loadingCount = document.getElementById('loading-count');
+
     return new Promise((resolve) => {
       let lastHeight = 0;
       let scrollAttempts = 0;
@@ -202,6 +278,10 @@
             const data = extractReelData(parent);
             if (data && data.url && !reelsData.find(r => r.url === data.url)) {
               reelsData.push(data);
+              // Update loading count
+              if (loadingCount) {
+                loadingCount.textContent = `${reelsData.length} reels found`;
+              }
               break; // Found data for this link, move to next
             }
             parent = parent.parentElement;
@@ -224,159 +304,222 @@
         // Stop if reached bottom, max scrolls, or stuck
         if (stuckCount >= 3 || scrollAttempts >= maxScrolls) {
           clearInterval(scrollInterval);
+
+          // Update loading text
+          if (loadingCount) {
+            loadingCount.textContent = `Found ${reelsData.length} reels! Preparing view...`;
+          }
+
+          // Scroll to top and resolve
           window.scrollTo({ top: 0, behavior: 'smooth' });
-          setTimeout(resolve, 500);
+          setTimeout(() => {
+            // Remove loading overlay
+            if (loadingOverlay) {
+              loadingOverlay.remove();
+            }
+            resolve();
+          }, 500);
         }
-        
+
         lastHeight = currentHeight;
       }, 400);
     });
   }
 
-  // Sort and reorder reels in DOM
+  // Create Instagram-like overlay with sorted reels
   function sortReelsByViews() {
     if (reelsData.length === 0) {
       showNotification('No reels found to sort');
       return;
     }
 
-    // Create a map of URL -> view count for quick lookup
-    const viewsMap = new Map();
-    reelsData.forEach(reel => {
-      viewsMap.set(reel.url, reel);
-    });
+    // Sort all collected reels by views
+    const sortedReels = [...reelsData].sort((a, b) => b.views - a.views);
 
-    console.log('[Reels Sorter] View data collected for', viewsMap.size, 'reels');
-    console.log('[Reels Sorter] Top 5 reels:', reelsData.sort((a, b) => b.views - a.views).slice(0, 5).map(r => ({
+    console.log('[Reels Sorter] Sorted', sortedReels.length, 'reels');
+    console.log('[Reels Sorter] Top 5:', sortedReels.slice(0, 5).map(r => ({
       url: r.url.split('/').pop(),
       views: r.views,
       viewsText: r.viewsText
     })));
 
-    // CRITICAL: Query FRESH DOM elements (don't use stored references!)
-    // Find all individual reel containers currently in the DOM
-    const reelContainers = [];
-    const processedUrls = new Set();
+    // Create full-screen overlay
+    const overlay = document.createElement('div');
+    overlay.id = 'reels-sorter-overlay';
+    overlay.style.cssText = `
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgb(0, 0, 0);
+      z-index: 99999;
+      overflow-y: auto;
+      overflow-x: hidden;
+    `;
 
-    // Find all reel links currently visible in DOM
-    const allReelLinks = document.querySelectorAll('a[href*="/reel/"]');
-    console.log('[Reels Sorter] Found reel links in current DOM:', allReelLinks.length);
+    // Create header (like Instagram's)
+    const header = document.createElement('div');
+    header.style.cssText = `
+      position: sticky;
+      top: 0;
+      background: rgb(0, 0, 0);
+      border-bottom: 1px solid rgb(38, 38, 38);
+      padding: 16px 20px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      z-index: 100000;
+    `;
 
-    // First pass: find what level the containers are at
-    let containerLevel = -1;
-    const firstLink = allReelLinks[0];
-    if (firstLink) {
-      let testContainer = firstLink;
-      for (let i = 0; i < 10; i++) {
-        testContainer = testContainer.parentElement;
-        if (!testContainer) break;
+    const title = document.createElement('h2');
+    title.textContent = `Sorted by Views (${sortedReels.length} reels)`;
+    title.style.cssText = `
+      color: rgb(255, 255, 255);
+      font-size: 16px;
+      font-weight: 600;
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    `;
 
-        const reelLinks = testContainer.querySelectorAll('a[href*="/reel/"]');
-        if (reelLinks.length === 1) {
-          containerLevel = i + 1; // +1 because we start from the link itself
-          console.log('[Reels Sorter] Container level detected:', containerLevel);
-          break;
-        }
+    const closeBtn = document.createElement('button');
+    closeBtn.textContent = '✕';
+    closeBtn.style.cssText = `
+      background: transparent;
+      border: none;
+      color: rgb(255, 255, 255);
+      font-size: 24px;
+      cursor: pointer;
+      padding: 4px 12px;
+      border-radius: 4px;
+      transition: background 0.2s;
+    `;
+    closeBtn.onmouseover = () => closeBtn.style.background = 'rgba(255,255,255,0.1)';
+    closeBtn.onmouseout = () => closeBtn.style.background = 'transparent';
+    closeBtn.onclick = () => overlay.remove();
+
+    header.appendChild(title);
+    header.appendChild(closeBtn);
+    overlay.appendChild(header);
+
+    // Create grid container (Instagram uses 3 columns on desktop)
+    const gridContainer = document.createElement('div');
+    gridContainer.style.cssText = `
+      max-width: 975px;
+      margin: 0 auto;
+      padding: 20px;
+    `;
+
+    const grid = document.createElement('div');
+    grid.style.cssText = `
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 4px;
+    `;
+
+    // Create grid items for each reel
+    sortedReels.forEach((reel, index) => {
+      const item = document.createElement('a');
+      item.href = reel.url;
+      item.target = '_self';
+      item.style.cssText = `
+        position: relative;
+        display: block;
+        aspect-ratio: 1;
+        overflow: hidden;
+        background: rgb(38, 38, 38);
+        cursor: pointer;
+        text-decoration: none;
+      `;
+
+      // Add thumbnail
+      if (reel.thumbnail) {
+        const img = document.createElement('img');
+        img.src = reel.thumbnail;
+        img.style.cssText = `
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+          display: block;
+        `;
+        item.appendChild(img);
       }
-    }
 
-    // Second pass: collect all containers at the SAME level
-    allReelLinks.forEach(link => {
-      const url = link.href;
-      if (processedUrls.has(url)) return;
+      // Add view count overlay (always visible)
+      const viewBadge = document.createElement('div');
+      viewBadge.style.cssText = `
+        position: absolute;
+        bottom: 8px;
+        left: 8px;
+        background: rgba(0, 0, 0, 0.7);
+        color: white;
+        padding: 4px 8px;
+        border-radius: 4px;
+        font-size: 12px;
+        font-weight: 600;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      `;
 
-      // Navigate to the exact container level we detected
-      let container = link;
-      for (let i = 0; i < containerLevel; i++) {
-        if (!container) break;
-        container = container.parentElement;
+      // Add play icon SVG (like Instagram)
+      const playIcon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      playIcon.setAttribute('width', '12');
+      playIcon.setAttribute('height', '12');
+      playIcon.setAttribute('viewBox', '0 0 24 24');
+      playIcon.setAttribute('fill', 'white');
+      playIcon.innerHTML = '<path d="M5.888 22.5a3.46 3.46 0 0 1-1.721-.46l-.003-.002a3.451 3.451 0 0 1-1.72-2.982V4.943a3.445 3.445 0 0 1 5.163-2.987l12.226 7.059a3.444 3.444 0 0 1-.001 5.967l-12.22 7.056a3.462 3.462 0 0 1-1.724.462Z"></path>';
+
+      viewBadge.appendChild(playIcon);
+      viewBadge.appendChild(document.createTextNode(reel.viewsText || reel.views.toLocaleString()));
+
+      item.appendChild(viewBadge);
+
+      // Add rank badge for top 3
+      if (index < 3) {
+        const rankBadge = document.createElement('div');
+        rankBadge.textContent = ['🥇', '🥈', '🥉'][index];
+        rankBadge.style.cssText = `
+          position: absolute;
+          top: 8px;
+          right: 8px;
+          font-size: 24px;
+          text-shadow: 0 2px 4px rgba(0,0,0,0.8);
+        `;
+        item.appendChild(rankBadge);
       }
 
-      if (!container) return;
+      // Hover effect overlay
+      const hoverOverlay = document.createElement('div');
+      hoverOverlay.style.cssText = `
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0, 0, 0, 0);
+        transition: background 0.2s;
+        pointer-events: none;
+      `;
+      item.appendChild(hoverOverlay);
 
-      // Verify this container has exactly 1 reel link
-      const reelLinks = container.querySelectorAll('a[href*="/reel/"]');
-      if (reelLinks.length === 1 && reelLinks[0].href === url) {
-        // Check if we have view data for this URL
-        const reelData = viewsMap.get(url);
-        reelContainers.push({
-          element: container,
-          url: url,
-          views: reelData ? reelData.views : 0,
-          viewsText: reelData ? reelData.viewsText : 'Unknown',
-          level: containerLevel
-        });
-        processedUrls.add(url);
-      }
+      item.onmouseover = () => hoverOverlay.style.background = 'rgba(0, 0, 0, 0.3)';
+      item.onmouseout = () => hoverOverlay.style.background = 'rgba(0, 0, 0, 0)';
+
+      grid.appendChild(item);
     });
 
-    console.log('[Reels Sorter] Found individual reel containers:', reelContainers.length);
+    gridContainer.appendChild(grid);
+    overlay.appendChild(gridContainer);
 
-    if (reelContainers.length === 0) {
-      showNotification('⚠️ Could not find reel containers in current view');
-      console.log('[Reels Sorter] No containers found. Try scrolling up to load reels.');
-      return;
-    }
+    // Add to page
+    document.body.appendChild(overlay);
 
-    // Sort by views descending
-    reelContainers.sort((a, b) => b.views - a.views);
+    // Scroll to top of overlay
+    overlay.scrollTop = 0;
 
-    console.log('[Reels Sorter] Top 5 after sort:', reelContainers.slice(0, 5).map(r => ({
-      url: r.url.split('/').pop(),
-      views: r.views,
-      viewsText: r.viewsText
-    })));
-
-    // NEW APPROACH: Content swapping instead of element moving
-    // This preserves the exact grid structure by swapping innerHTML between containers
-    console.log('[Reels Sorter] Using content-swap approach to preserve grid structure');
-
-    // Create a map of current position -> sorted position
-    const originalPositions = reelContainers.map((item, index) => ({
-      element: item.element,
-      originalIndex: index,
-      views: item.views,
-      innerHTML: item.element.innerHTML,
-      attributes: Array.from(item.element.attributes).map(attr => ({
-        name: attr.name,
-        value: attr.value
-      }))
-    }));
-
-    // Sort by views
-    const sortedByViews = [...originalPositions].sort((a, b) => b.views - a.views);
-
-    console.log('[Reels Sorter] Swapping content between containers...');
-    console.log('[Reels Sorter] Will swap content of', originalPositions.length, 'containers');
-
-    // Swap content: Put highest view content in first container, etc.
-    originalPositions.forEach((target, index) => {
-      const source = sortedByViews[index];
-
-      // Replace the entire innerHTML and attributes
-      target.element.innerHTML = source.innerHTML;
-
-      // Copy over any data attributes or classes that might affect styling
-      // But preserve position-related attributes
-      source.attributes.forEach(attr => {
-        if (!attr.name.includes('style') && !attr.name.includes('data-collected')) {
-          try {
-            target.element.setAttribute(attr.name, attr.value);
-          } catch(e) {
-            // Some attributes can't be set, skip them
-          }
-        }
-      });
-    });
-
-    console.log('[Reels Sorter] ✅ Content swapped successfully');
-    console.log('[Reels Sorter] Grid structure preserved, reels sorted by views');
-    console.log('[Reels Sorter] Top 3 reels (after sorting):');
-    console.log('#1:', sortedByViews[0].views, 'views');
-    console.log('#2:', sortedByViews[1].views, 'views');
-    console.log('#3:', sortedByViews[2].views, 'views');
-
-    showNotification(`✅ Sorted ${reelContainers.length} reels by views!`);
+    console.log('[Reels Sorter] ✅ Overlay created with', sortedReels.length, 'sorted reels');
   }
 
   // Show notification
