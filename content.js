@@ -86,16 +86,16 @@
   // Extract reel data from DOM element
   function extractReelData(element) {
     try {
-      const link = element.querySelector('a[href*="/reel/"]') || 
+      const link = element.querySelector('a[href*="/reel/"]') ||
                    element.querySelector('a[href*="/p/"]');
       if (!link) return null;
-      
+
       const url = link.href;
-      
+
       // Try multiple methods to find views
       let viewsText = '';
       let views = 0;
-      
+
       // Method 1: Look for SVG icon followed by text (Instagram's current structure)
       const svgParents = element.querySelectorAll('svg');
       for (const svg of svgParents) {
@@ -113,27 +113,36 @@
           }
         }
       }
-      
-      // Method 2: Search all text nodes for "views" or just numbers
+
+      // Method 2: Search all text nodes for numbers (most reliable)
       if (!viewsText) {
         const allSpans = element.querySelectorAll('span, div');
+        let maxViews = 0;
+
         for (const el of allSpans) {
           const text = el.textContent.trim();
-          // Match patterns like "7,125" or "5.5K" or "1.2M"
-          if (text.match(/^[\d,.]+[KMB]?$/i) && text.length < 10) {
-            viewsText = text;
-            views = parseViewCount(text);
-            break;
+          // Match patterns like "7,125" or "5.5K" or "1.2M" (exactly, no extra text)
+          if (text.match(/^[\d,]+$/) || text.match(/^[\d,.]+[KMB]$/i)) {
+            const parsedViews = parseViewCount(text);
+            // Take the highest number found (likely the view count)
+            if (parsedViews > maxViews) {
+              maxViews = parsedViews;
+              viewsText = text;
+              views = parsedViews;
+            }
           }
           // Also try with "views" text
           if (text.match(/[\d,.]+[KMB]?\s*(views?|Views?)/i)) {
-            viewsText = text;
-            views = parseViewCount(text);
-            break;
+            const parsedViews = parseViewCount(text);
+            if (parsedViews > maxViews) {
+              maxViews = parsedViews;
+              viewsText = text;
+              views = parsedViews;
+            }
           }
         }
       }
-      
+
       // Method 3: Check aria-labels
       if (!viewsText) {
         const ariaElements = element.querySelectorAll('[aria-label]');
@@ -146,9 +155,9 @@
           }
         }
       }
-      
+
+      // DON'T store element reference - it will become stale!
       return {
-        element: element,
         url: url,
         views: views,
         viewsText: viewsText
@@ -189,13 +198,11 @@
           let parent = link.parentElement;
           for (let i = 0; i < 5; i++) {
             if (!parent) break;
-            
-            if (!parent.dataset.collected) {
-              const data = extractReelData(parent);
-              if (data && data.url && !reelsData.find(r => r.url === data.url)) {
-                reelsData.push(data);
-                parent.dataset.collected = 'true';
-              }
+
+            const data = extractReelData(parent);
+            if (data && data.url && !reelsData.find(r => r.url === data.url)) {
+              reelsData.push(data);
+              break; // Found data for this link, move to next
             }
             parent = parent.parentElement;
           }
@@ -232,161 +239,148 @@
       showNotification('No reels found to sort');
       return;
     }
-    
-    // Sort by views descending
-    reelsData.sort((a, b) => b.views - a.views);
-    
-    console.log('[Reels Sorter] Top 5 reels:', reelsData.slice(0, 5).map(r => ({
+
+    // Create a map of URL -> view count for quick lookup
+    const viewsMap = new Map();
+    reelsData.forEach(reel => {
+      viewsMap.set(reel.url, reel);
+    });
+
+    console.log('[Reels Sorter] View data collected for', viewsMap.size, 'reels');
+    console.log('[Reels Sorter] Top 5 reels:', reelsData.sort((a, b) => b.views - a.views).slice(0, 5).map(r => ({
       url: r.url.split('/').pop(),
       views: r.views,
       viewsText: r.viewsText
     })));
-    
-    // Strategy: Find individual reel containers (each contains exactly 1 reel)
-    const gridItems = [];
+
+    // CRITICAL: Query FRESH DOM elements (don't use stored references!)
+    // Find all individual reel containers currently in the DOM
+    const reelContainers = [];
     const processedUrls = new Set();
-    
-    reelsData.forEach(reel => {
-      if (processedUrls.has(reel.url)) return;
-      processedUrls.add(reel.url);
-      
-      // Use the element we already stored during collection
-      if (!reel.element) {
-        console.log('[Reels Sorter] No element for reel:', reel.url);
-        return;
-      }
-      
-      // Walk up from the stored element to find the individual reel container
-      // This container should have exactly 1 reel link
-      let element = reel.element;
-      let foundContainer = null;
-      
-      for (let i = 0; i < 10; i++) {
-        if (!element) break;
-        
-        // Check if this element contains exactly 1 reel link
-        const reelLinks = element.querySelectorAll('a[href*="/reel/"]');
-        
+
+    // Find all reel links currently visible in DOM
+    const allReelLinks = document.querySelectorAll('a[href*="/reel/"]');
+    console.log('[Reels Sorter] Found reel links in current DOM:', allReelLinks.length);
+
+    allReelLinks.forEach(link => {
+      const url = link.href;
+      if (processedUrls.has(url)) return;
+
+      // Find the container that holds this specific reel
+      // It's usually 2-6 levels up from the link
+      let container = link;
+
+      for (let i = 0; i < 8; i++) {
+        container = container.parentElement;
+        if (!container) break;
+
+        // Check if this container has exactly 1 reel link (individual reel container)
+        const reelLinks = container.querySelectorAll('a[href*="/reel/"]');
         if (reelLinks.length === 1) {
           // This is an individual reel container
-          foundContainer = element;
+          // Check if we have view data for this URL
+          const reelData = viewsMap.get(url);
+          if (reelData) {
+            reelContainers.push({
+              element: container,
+              url: url,
+              views: reelData.views,
+              viewsText: reelData.viewsText
+            });
+            processedUrls.add(url);
+          } else {
+            // No view data, assign 0 views
+            reelContainers.push({
+              element: container,
+              url: url,
+              views: 0,
+              viewsText: 'Unknown'
+            });
+            processedUrls.add(url);
+          }
           break;
         }
-        
-        element = element.parentElement;
-      }
-      
-      if (foundContainer) {
-        gridItems.push({ element: foundContainer, reel: reel });
-      } else {
-        console.log('[Reels Sorter] Could not find container for:', reel.url.split('/').pop());
       }
     });
-    
-    console.log('[Reels Sorter] Found grid items:', gridItems.length);
-    
-    if (gridItems.length === 0) {
-      console.log('[Reels Sorter] Trying alternative method...');
-      
-      // Alternative: Find all reel links currently in DOM
-      const allReelLinks = document.querySelectorAll('a[href*="/reel/"]');
-      console.log('[Reels Sorter] Found reel links in DOM:', allReelLinks.length);
-      
-      allReelLinks.forEach(link => {
-        let element = link;
-        
-        for (let i = 0; i < 10; i++) {
-          if (!element) break;
-          
-          const reelLinks = element.querySelectorAll('a[href*="/reel/"]');
-          
-          if (reelLinks.length === 1) {
-            // Find matching reel data
-            const matchingReel = reelsData.find(r => element.querySelector(`a[href="${r.url}"]`));
-            
-            if (matchingReel) {
-              gridItems.push({ element: element, reel: matchingReel });
-            }
-            break;
-          }
-          
-          element = element.parentElement;
-        }
-      });
-      
-      console.log('[Reels Sorter] Alternative method found:', gridItems.length);
-    }
-    
-    if (gridItems.length === 0) {
-      showNotification('⚠️ Could not identify grid items');
+
+    console.log('[Reels Sorter] Found individual reel containers:', reelContainers.length);
+
+    if (reelContainers.length === 0) {
+      showNotification('⚠️ Could not find reel containers in current view');
+      console.log('[Reels Sorter] No containers found. Try scrolling up to load reels.');
       return;
     }
-    
-    // Find common parent - EXACT logic from working fixed_sort.js
+
+    // Sort by views descending
+    reelContainers.sort((a, b) => b.views - a.views);
+
+    console.log('[Reels Sorter] Top 5 after sort:', reelContainers.slice(0, 5).map(r => ({
+      url: r.url.split('/').pop(),
+      views: r.views,
+      viewsText: r.viewsText
+    })));
+
+    // Find the common parent that contains all these containers
     console.log('[Reels Sorter] Finding common parent...');
-    
-    let container = null;
-    let current = gridItems[0].element;
-    
+
+    let commonParent = null;
+    let current = reelContainers[0].element;
+
     for (let level = 0; level < 15; level++) {
       if (!current) break;
-      
+
       // Check how many of our containers this level contains
       let containsCount = 0;
-      gridItems.forEach(item => {
+      reelContainers.forEach(item => {
         if (current.contains(item.element)) {
           containsCount++;
         }
       });
-      
-      console.log(`[Reels Sorter] Level ${level}: Contains ${containsCount}/${gridItems.length} containers`);
-      
+
+      console.log(`[Reels Sorter] Level ${level}: Contains ${containsCount}/${reelContainers.length} containers`);
+
       // If this level contains all our containers, use it
-      if (containsCount === gridItems.length) {
-        container = current;
+      if (containsCount === reelContainers.length) {
+        commonParent = current;
         console.log(`[Reels Sorter] ✓ Found common parent at level ${level}`);
         break;
       }
-      
+
       current = current.parentElement;
     }
-    
-    if (!container) {
+
+    if (!commonParent) {
       showNotification('⚠️ Could not find common parent');
       console.log('[Reels Sorter] Failed to find common parent');
+      console.log('[Reels Sorter] This usually means reels are in different sections');
       return;
     }
-    
-    console.log('[Reels Sorter] Common parent has', container.children.length, 'direct children');
-    
-    // Reorder using remove() and insertBefore() - EXACT logic from working script
-    // Detach all our containers
-    gridItems.forEach(item => {
+
+    console.log('[Reels Sorter] Common parent has', commonParent.children.length, 'direct children');
+
+    // Reorder by moving elements
+    // Detach all our containers first
+    reelContainers.forEach(item => {
       if (item.element.parentElement) {
         item.element.remove();
       }
     });
-    
-    // Find where to insert them back
-    const insertPoint = container.firstChild;
-    
-    // Insert in sorted order
-    gridItems.forEach(item => {
+
+    // Insert them back in sorted order at the beginning
+    const insertPoint = commonParent.firstChild;
+
+    reelContainers.forEach(item => {
       if (insertPoint) {
-        container.insertBefore(item.element, insertPoint);
+        commonParent.insertBefore(item.element, insertPoint);
       } else {
-        container.appendChild(item.element);
+        commonParent.appendChild(item.element);
       }
     });
-    
-    console.log('[Reels Sorter] DOM reordered successfully');
-    console.log('[Reels Sorter] Top 3 after sort:', gridItems.slice(0, 3).map(item => ({
-      views: item.reel.views,
-      text: item.reel.viewsText
-    })));
-    
-    // Add visual indicators to top reels
-    gridItems.slice(0, 3).forEach((item, index) => {
+
+    console.log('[Reels Sorter] ✅ DOM reordered successfully');
+
+    // Add visual indicators to top 3 reels
+    reelContainers.slice(0, 3).forEach((item, index) => {
       const badge = document.createElement('div');
       badge.textContent = ['🥇', '🥈', '🥉'][index];
       badge.className = 'sort-medal';
@@ -405,7 +399,7 @@
         justify-content: center;
         box-shadow: 0 2px 8px rgba(0,0,0,0.5);
       `;
-      
+
       // Find the link container and make it relative
       const linkContainer = item.element.querySelector('a[href*="/reel/"]');
       if (linkContainer) {
@@ -413,14 +407,14 @@
         linkContainer.appendChild(badge);
       }
     });
-    
-    console.log('[Reels Sorter] Medals added!');
+
+    console.log('[Reels Sorter] ✅ Medals added!');
     console.log('[Reels Sorter] Top 3 reels:');
-    console.log('🥇', gridItems[0].reel.views, 'views');
-    console.log('🥈', gridItems[1].reel.views, 'views');
-    console.log('🥉', gridItems[2].reel.views, 'views');
-    
-    showNotification(`✅ Sorted ${gridItems.length} reels by views!`);
+    console.log('🥇', reelContainers[0].views, 'views -', reelContainers[0].viewsText);
+    console.log('🥈', reelContainers[1].views, 'views -', reelContainers[1].viewsText);
+    console.log('🥉', reelContainers[2].views, 'views -', reelContainers[2].viewsText);
+
+    showNotification(`✅ Sorted ${reelContainers.length} reels by views!`);
   }
 
   // Show notification
