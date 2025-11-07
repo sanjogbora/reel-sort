@@ -327,126 +327,54 @@
       viewsText: r.viewsText
     })));
 
-    // Find the common parent that contains all these containers
-    console.log('[Reels Sorter] Finding common parent...');
+    // NEW APPROACH: Content swapping instead of element moving
+    // This preserves the exact grid structure by swapping innerHTML between containers
+    console.log('[Reels Sorter] Using content-swap approach to preserve grid structure');
 
-    let commonParent = null;
-    let current = reelContainers[0].element;
+    // Create a map of current position -> sorted position
+    const originalPositions = reelContainers.map((item, index) => ({
+      element: item.element,
+      originalIndex: index,
+      views: item.views,
+      innerHTML: item.element.innerHTML,
+      attributes: Array.from(item.element.attributes).map(attr => ({
+        name: attr.name,
+        value: attr.value
+      }))
+    }));
 
-    for (let level = 0; level < 15; level++) {
-      if (!current) break;
+    // Sort by views
+    const sortedByViews = [...originalPositions].sort((a, b) => b.views - a.views);
 
-      // Check how many of our containers this level contains
-      let containsCount = 0;
-      reelContainers.forEach(item => {
-        if (current.contains(item.element)) {
-          containsCount++;
+    console.log('[Reels Sorter] Swapping content between containers...');
+    console.log('[Reels Sorter] Will swap content of', originalPositions.length, 'containers');
+
+    // Swap content: Put highest view content in first container, etc.
+    originalPositions.forEach((target, index) => {
+      const source = sortedByViews[index];
+
+      // Replace the entire innerHTML and attributes
+      target.element.innerHTML = source.innerHTML;
+
+      // Copy over any data attributes or classes that might affect styling
+      // But preserve position-related attributes
+      source.attributes.forEach(attr => {
+        if (!attr.name.includes('style') && !attr.name.includes('data-collected')) {
+          try {
+            target.element.setAttribute(attr.name, attr.value);
+          } catch(e) {
+            // Some attributes can't be set, skip them
+          }
         }
       });
-
-      console.log(`[Reels Sorter] Level ${level}: Contains ${containsCount}/${reelContainers.length} containers`);
-
-      // If this level contains all our containers, use it
-      if (containsCount === reelContainers.length) {
-        commonParent = current;
-        console.log(`[Reels Sorter] ✓ Found common parent at level ${level}`);
-        break;
-      }
-
-      current = current.parentElement;
-    }
-
-    if (!commonParent) {
-      showNotification('⚠️ Could not find common parent');
-      console.log('[Reels Sorter] Failed to find common parent');
-      console.log('[Reels Sorter] This usually means reels are in different sections');
-      return;
-    }
-
-    console.log('[Reels Sorter] Common parent has', commonParent.children.length, 'direct children');
-    console.log('[Reels Sorter] Common parent tag:', commonParent.tagName, 'classes:', commonParent.className);
-
-    // Verify all containers share the same immediate parent
-    const parentSet = new Set();
-    reelContainers.forEach(item => {
-      parentSet.add(item.element.parentElement);
     });
 
-    console.log('[Reels Sorter] Containers have', parentSet.size, 'different immediate parents');
-
-    // If containers don't share the same parent, we need to find wrapper elements
-    if (parentSet.size > 1) {
-      console.log('[Reels Sorter] Containers are not siblings, finding wrapper level...');
-
-      // Go one level up from each container to find wrappers that ARE siblings
-      const wrappers = [];
-      reelContainers.forEach(item => {
-        let wrapper = item.element.parentElement;
-
-        // Keep going up until we find an element whose parent is commonParent
-        while (wrapper && wrapper.parentElement !== commonParent) {
-          wrapper = wrapper.parentElement;
-        }
-
-        if (wrapper && wrapper.parentElement === commonParent) {
-          wrappers.push({
-            wrapper: wrapper,
-            container: item
-          });
-        }
-      });
-
-      console.log('[Reels Sorter] Found', wrappers.length, 'wrapper elements');
-
-      if (wrappers.length !== reelContainers.length) {
-        console.log('[Reels Sorter] WARNING: Could not find wrappers for all containers');
-        showNotification('⚠️ Complex layout detected, sorting may not work correctly');
-        return;
-      }
-
-      // Sort wrappers based on the view counts of their containers
-      wrappers.sort((a, b) => b.container.views - a.container.views);
-
-      // Reorder the wrappers
-      wrappers.forEach(item => {
-        if (item.wrapper.parentElement) {
-          item.wrapper.remove();
-        }
-      });
-
-      const insertPoint = commonParent.firstChild;
-      wrappers.forEach(item => {
-        if (insertPoint) {
-          commonParent.insertBefore(item.wrapper, insertPoint);
-        } else {
-          commonParent.appendChild(item.wrapper);
-        }
-      });
-    } else {
-      // All containers are siblings - simple reorder
-      console.log('[Reels Sorter] All containers are siblings, doing simple reorder');
-
-      reelContainers.forEach(item => {
-        if (item.element.parentElement) {
-          item.element.remove();
-        }
-      });
-
-      const insertPoint = commonParent.firstChild;
-      reelContainers.forEach(item => {
-        if (insertPoint) {
-          commonParent.insertBefore(item.element, insertPoint);
-        } else {
-          commonParent.appendChild(item.element);
-        }
-      });
-    }
-
-    console.log('[Reels Sorter] ✅ DOM reordered successfully');
-    console.log('[Reels Sorter] Top 3 reels:');
-    console.log('#1:', reelContainers[0].views, 'views -', reelContainers[0].viewsText);
-    console.log('#2:', reelContainers[1].views, 'views -', reelContainers[1].viewsText);
-    console.log('#3:', reelContainers[2].views, 'views -', reelContainers[2].viewsText);
+    console.log('[Reels Sorter] ✅ Content swapped successfully');
+    console.log('[Reels Sorter] Grid structure preserved, reels sorted by views');
+    console.log('[Reels Sorter] Top 3 reels (after sorting):');
+    console.log('#1:', sortedByViews[0].views, 'views');
+    console.log('#2:', sortedByViews[1].views, 'views');
+    console.log('#3:', sortedByViews[2].views, 'views');
 
     showNotification(`✅ Sorted ${reelContainers.length} reels by views!`);
   }
