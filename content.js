@@ -262,44 +262,51 @@
     const allReelLinks = document.querySelectorAll('a[href*="/reel/"]');
     console.log('[Reels Sorter] Found reel links in current DOM:', allReelLinks.length);
 
+    // First pass: find what level the containers are at
+    let containerLevel = -1;
+    const firstLink = allReelLinks[0];
+    if (firstLink) {
+      let testContainer = firstLink;
+      for (let i = 0; i < 10; i++) {
+        testContainer = testContainer.parentElement;
+        if (!testContainer) break;
+
+        const reelLinks = testContainer.querySelectorAll('a[href*="/reel/"]');
+        if (reelLinks.length === 1) {
+          containerLevel = i + 1; // +1 because we start from the link itself
+          console.log('[Reels Sorter] Container level detected:', containerLevel);
+          break;
+        }
+      }
+    }
+
+    // Second pass: collect all containers at the SAME level
     allReelLinks.forEach(link => {
       const url = link.href;
       if (processedUrls.has(url)) return;
 
-      // Find the container that holds this specific reel
-      // It's usually 2-6 levels up from the link
+      // Navigate to the exact container level we detected
       let container = link;
-
-      for (let i = 0; i < 8; i++) {
-        container = container.parentElement;
+      for (let i = 0; i < containerLevel; i++) {
         if (!container) break;
+        container = container.parentElement;
+      }
 
-        // Check if this container has exactly 1 reel link (individual reel container)
-        const reelLinks = container.querySelectorAll('a[href*="/reel/"]');
-        if (reelLinks.length === 1) {
-          // This is an individual reel container
-          // Check if we have view data for this URL
-          const reelData = viewsMap.get(url);
-          if (reelData) {
-            reelContainers.push({
-              element: container,
-              url: url,
-              views: reelData.views,
-              viewsText: reelData.viewsText
-            });
-            processedUrls.add(url);
-          } else {
-            // No view data, assign 0 views
-            reelContainers.push({
-              element: container,
-              url: url,
-              views: 0,
-              viewsText: 'Unknown'
-            });
-            processedUrls.add(url);
-          }
-          break;
-        }
+      if (!container) return;
+
+      // Verify this container has exactly 1 reel link
+      const reelLinks = container.querySelectorAll('a[href*="/reel/"]');
+      if (reelLinks.length === 1 && reelLinks[0].href === url) {
+        // Check if we have view data for this URL
+        const reelData = viewsMap.get(url);
+        reelContainers.push({
+          element: container,
+          url: url,
+          views: reelData ? reelData.views : 0,
+          viewsText: reelData ? reelData.viewsText : 'Unknown',
+          level: containerLevel
+        });
+        processedUrls.add(url);
       }
     });
 
@@ -357,25 +364,83 @@
     }
 
     console.log('[Reels Sorter] Common parent has', commonParent.children.length, 'direct children');
+    console.log('[Reels Sorter] Common parent tag:', commonParent.tagName, 'classes:', commonParent.className);
 
-    // Reorder by moving elements
-    // Detach all our containers first
+    // Verify all containers share the same immediate parent
+    const parentSet = new Set();
     reelContainers.forEach(item => {
-      if (item.element.parentElement) {
-        item.element.remove();
-      }
+      parentSet.add(item.element.parentElement);
     });
 
-    // Insert them back in sorted order at the beginning
-    const insertPoint = commonParent.firstChild;
+    console.log('[Reels Sorter] Containers have', parentSet.size, 'different immediate parents');
 
-    reelContainers.forEach(item => {
-      if (insertPoint) {
-        commonParent.insertBefore(item.element, insertPoint);
-      } else {
-        commonParent.appendChild(item.element);
+    // If containers don't share the same parent, we need to find wrapper elements
+    if (parentSet.size > 1) {
+      console.log('[Reels Sorter] Containers are not siblings, finding wrapper level...');
+
+      // Go one level up from each container to find wrappers that ARE siblings
+      const wrappers = [];
+      reelContainers.forEach(item => {
+        let wrapper = item.element.parentElement;
+
+        // Keep going up until we find an element whose parent is commonParent
+        while (wrapper && wrapper.parentElement !== commonParent) {
+          wrapper = wrapper.parentElement;
+        }
+
+        if (wrapper && wrapper.parentElement === commonParent) {
+          wrappers.push({
+            wrapper: wrapper,
+            container: item
+          });
+        }
+      });
+
+      console.log('[Reels Sorter] Found', wrappers.length, 'wrapper elements');
+
+      if (wrappers.length !== reelContainers.length) {
+        console.log('[Reels Sorter] WARNING: Could not find wrappers for all containers');
+        showNotification('⚠️ Complex layout detected, sorting may not work correctly');
+        return;
       }
-    });
+
+      // Sort wrappers based on the view counts of their containers
+      wrappers.sort((a, b) => b.container.views - a.container.views);
+
+      // Reorder the wrappers
+      wrappers.forEach(item => {
+        if (item.wrapper.parentElement) {
+          item.wrapper.remove();
+        }
+      });
+
+      const insertPoint = commonParent.firstChild;
+      wrappers.forEach(item => {
+        if (insertPoint) {
+          commonParent.insertBefore(item.wrapper, insertPoint);
+        } else {
+          commonParent.appendChild(item.wrapper);
+        }
+      });
+    } else {
+      // All containers are siblings - simple reorder
+      console.log('[Reels Sorter] All containers are siblings, doing simple reorder');
+
+      reelContainers.forEach(item => {
+        if (item.element.parentElement) {
+          item.element.remove();
+        }
+      });
+
+      const insertPoint = commonParent.firstChild;
+      reelContainers.forEach(item => {
+        if (insertPoint) {
+          commonParent.insertBefore(item.element, insertPoint);
+        } else {
+          commonParent.appendChild(item.element);
+        }
+      });
+    }
 
     console.log('[Reels Sorter] ✅ DOM reordered successfully');
     console.log('[Reels Sorter] Top 3 reels:');
