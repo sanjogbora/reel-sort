@@ -92,12 +92,46 @@
 
       const url = link.href;
 
-      // Extract thumbnail image (find the actual img element)
+      // Extract thumbnail image - handle lazy loading and multiple sources
       let thumbnail = '';
       const imgs = element.querySelectorAll('img');
+
       for (const img of imgs) {
-        if (img.src && !img.src.includes('profile') && img.src.includes('https://')) {
-          thumbnail = img.src;
+        // Skip profile pictures and other non-reel images
+        if (img.alt && img.alt.toLowerCase().includes('profile')) continue;
+
+        // Try multiple sources in order of preference
+        let imgSrc = '';
+
+        // 1. Try srcset (highest quality)
+        if (img.srcset) {
+          const sources = img.srcset.split(',').map(s => {
+            const parts = s.trim().split(' ');
+            return {
+              url: parts[0],
+              width: parseInt(parts[1]) || 0
+            };
+          });
+          // Get highest quality
+          sources.sort((a, b) => b.width - a.width);
+          if (sources.length > 0) {
+            imgSrc = sources[0].url;
+          }
+        }
+
+        // 2. Try regular src
+        if (!imgSrc && img.src && img.src.startsWith('http')) {
+          imgSrc = img.src;
+        }
+
+        // 3. Try data-src (lazy loading)
+        if (!imgSrc && img.dataset.src) {
+          imgSrc = img.dataset.src;
+        }
+
+        // Validate it's a real Instagram image URL
+        if (imgSrc && (imgSrc.includes('cdninstagram') || imgSrc.includes('fbcdn'))) {
+          thumbnail = imgSrc;
           break;
         }
       }
@@ -392,7 +426,7 @@
     const container = document.createElement('div');
     container.id = 'reels-sorter-grid';
     container.style.cssText = `
-      max-width: 975px;
+      max-width: 935px;
       margin: 0 auto;
       padding: 30px 20px;
     `;
@@ -452,7 +486,7 @@
     grid.style.cssText = `
       display: grid;
       grid-template-columns: repeat(3, 1fr);
-      gap: 4px;
+      gap: 1px;
     `;
 
     // Create grid items for each reel
@@ -462,14 +496,14 @@
       item.style.cssText = `
         position: relative;
         display: block;
-        aspect-ratio: 4/5;
+        aspect-ratio: 9/16;
         overflow: hidden;
-        background: rgb(239, 239, 239);
+        background: rgb(38, 38, 38);
         cursor: pointer;
         text-decoration: none;
       `;
 
-      // Add thumbnail
+      // Add thumbnail or placeholder
       if (reel.thumbnail) {
         const img = document.createElement('img');
         img.src = reel.thumbnail;
@@ -479,7 +513,38 @@
           object-fit: cover;
           display: block;
         `;
+        img.onerror = () => {
+          // If image fails to load, show placeholder
+          img.style.display = 'none';
+          item.appendChild(createPlaceholder());
+        };
         item.appendChild(img);
+      } else {
+        // No thumbnail - show placeholder
+        item.appendChild(createPlaceholder());
+      }
+
+      // Placeholder function
+      function createPlaceholder() {
+        const placeholder = document.createElement('div');
+        placeholder.style.cssText = `
+          width: 100%;
+          height: 100%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          background: rgb(38, 38, 38);
+        `;
+
+        const reelIconPlaceholder = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        reelIconPlaceholder.setAttribute('width', '48');
+        reelIconPlaceholder.setAttribute('height', '48');
+        reelIconPlaceholder.setAttribute('viewBox', '0 0 24 24');
+        reelIconPlaceholder.setAttribute('fill', 'rgb(115, 115, 115)');
+        reelIconPlaceholder.innerHTML = '<path d="m12.823 1 2.974 5.002h-5.58l-2.65-4.971c.206-.013.419-.022.642-.027L8.55 1Zm2.327 0h.298c3.06 0 4.468.754 5.64 1.887a6.007 6.007 0 0 1 1.596 2.82l.07.295h-4.629L15.15 1Zm-9.667.377L7.95 6.002H1.244a6.01 6.01 0 0 1 3.942-4.53Zm9.735 12.834-4.545-2.624a.909.909 0 0 0-1.356.668l-.008.12v5.248a.91.91 0 0 0 1.255.84l.109-.053 4.545-2.624a.909.909 0 0 0 .1-1.507l-.1-.068-4.545-2.624Zm-14.2-6.209h21.964l.015.36.003.189v6.899c0 3.061-.755 4.469-1.888 5.64-1.151 1.114-2.5 1.856-5.33 1.909l-.334.003H8.551c-3.06 0-4.467-.755-5.64-1.889-1.114-1.15-1.854-2.498-1.908-5.33L1 15.45V8.551l.003-.189Z"></path>';
+
+        placeholder.appendChild(reelIconPlaceholder);
+        return placeholder;
       }
 
       // Add reel icon (top right - indicates it's a video)
