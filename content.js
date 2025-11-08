@@ -92,47 +92,40 @@
 
       const url = link.href;
 
-      // Extract thumbnail image - handle lazy loading and multiple sources
+      // Extract thumbnail - Instagram uses background-image on div elements
       let thumbnail = '';
-      const imgs = element.querySelectorAll('img');
 
-      for (const img of imgs) {
-        // Skip profile pictures and other non-reel images
-        if (img.alt && img.alt.toLowerCase().includes('profile')) continue;
+      // Look for divs with background-image style
+      const allDivs = element.querySelectorAll('div[style*="background-image"]');
 
-        // Try multiple sources in order of preference
-        let imgSrc = '';
+      for (const div of allDivs) {
+        const style = div.getAttribute('style');
+        if (!style) continue;
 
-        // 1. Try srcset (highest quality)
-        if (img.srcset) {
-          const sources = img.srcset.split(',').map(s => {
-            const parts = s.trim().split(' ');
-            return {
-              url: parts[0],
-              width: parseInt(parts[1]) || 0
-            };
-          });
-          // Get highest quality
-          sources.sort((a, b) => b.width - a.width);
-          if (sources.length > 0) {
-            imgSrc = sources[0].url;
+        // Extract URL from background-image: url('...')
+        const match = style.match(/background-image:\s*url\(['"]?([^'"()]+)['"]?\)/i);
+        if (match && match[1]) {
+          const url = match[1];
+          // Validate it's a real Instagram image URL
+          if (url.includes('cdninstagram') || url.includes('fbcdn')) {
+            thumbnail = url;
+            break;
           }
         }
+      }
 
-        // 2. Try regular src
-        if (!imgSrc && img.src && img.src.startsWith('http')) {
-          imgSrc = img.src;
-        }
+      // Fallback: Try img tags if background-image not found
+      if (!thumbnail) {
+        const imgs = element.querySelectorAll('img');
+        for (const img of imgs) {
+          // Skip profile pictures
+          if (img.alt && img.alt.toLowerCase().includes('profile')) continue;
 
-        // 3. Try data-src (lazy loading)
-        if (!imgSrc && img.dataset.src) {
-          imgSrc = img.dataset.src;
-        }
-
-        // Validate it's a real Instagram image URL
-        if (imgSrc && (imgSrc.includes('cdninstagram') || imgSrc.includes('fbcdn'))) {
-          thumbnail = imgSrc;
-          break;
+          const imgSrc = img.src || img.dataset.src || '';
+          if (imgSrc && (imgSrc.includes('cdninstagram') || imgSrc.includes('fbcdn'))) {
+            thumbnail = imgSrc;
+            break;
+          }
         }
       }
 
@@ -410,17 +403,25 @@
       viewsText: r.viewsText
     })));
 
-    // Find Instagram's main content container
-    const mainContent = document.querySelector('main') || document.querySelector('[role="main"]');
-    if (!mainContent) {
-      console.log('[Reels Sorter] Could not find main content area');
-      showNotification('Could not find Instagram content area');
-      return;
-    }
+    // Find Instagram's grid container (prefer _ac7v class, or fallback to main)
+    let gridContainer = document.querySelector('._ac7v');
+    let targetContainer;
 
-    // Hide original content
-    const originalContent = mainContent.innerHTML;
-    mainContent.dataset.originalContent = originalContent;
+    if (gridContainer) {
+      // Found Instagram's grid container - replace only this
+      targetContainer = gridContainer;
+      targetContainer.dataset.originalContent = targetContainer.innerHTML;
+    } else {
+      // Fallback: use main but try to preserve profile header
+      const mainContent = document.querySelector('main') || document.querySelector('[role="main"]');
+      if (!mainContent) {
+        console.log('[Reels Sorter] Could not find main content area');
+        showNotification('Could not find Instagram content area');
+        return;
+      }
+      targetContainer = mainContent;
+      targetContainer.dataset.originalContent = targetContainer.innerHTML;
+    }
 
     // Create our sorted grid container
     const container = document.createElement('div');
@@ -473,19 +474,19 @@
       closeBtn.style.background = 'transparent';
     };
     closeBtn.onclick = () => {
-      mainContent.innerHTML = mainContent.dataset.originalContent;
-      delete mainContent.dataset.originalContent;
+      targetContainer.innerHTML = targetContainer.dataset.originalContent;
+      delete targetContainer.dataset.originalContent;
     };
 
     header.appendChild(title);
     header.appendChild(closeBtn);
     container.appendChild(header);
 
-    // Create grid (3 columns, matching Instagram)
+    // Create grid (5 columns for compact view)
     const grid = document.createElement('div');
     grid.style.cssText = `
       display: grid;
-      grid-template-columns: repeat(3, 1fr);
+      grid-template-columns: repeat(5, 1fr);
       gap: 1px;
     `;
 
@@ -496,11 +497,28 @@
       item.style.cssText = `
         position: relative;
         display: block;
-        aspect-ratio: 9/16;
         overflow: hidden;
-        background: rgb(38, 38, 38);
         cursor: pointer;
         text-decoration: none;
+      `;
+
+      // Create aspect ratio container using padding-top technique (Instagram style)
+      const aspectContainer = document.createElement('div');
+      aspectContainer.style.cssText = `
+        position: relative;
+        width: 100%;
+        padding-top: 155.66%;
+        background: rgb(38, 38, 38);
+      `;
+
+      // Create content wrapper (absolutely positioned inside aspect container)
+      const contentWrapper = document.createElement('div');
+      contentWrapper.style.cssText = `
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
       `;
 
       // Add thumbnail or placeholder
@@ -516,12 +534,12 @@
         img.onerror = () => {
           // If image fails to load, show placeholder
           img.style.display = 'none';
-          item.appendChild(createPlaceholder());
+          contentWrapper.appendChild(createPlaceholder());
         };
-        item.appendChild(img);
+        contentWrapper.appendChild(img);
       } else {
         // No thumbnail - show placeholder
-        item.appendChild(createPlaceholder());
+        contentWrapper.appendChild(createPlaceholder());
       }
 
       // Placeholder function
@@ -560,7 +578,7 @@
         right: 8px;
         filter: drop-shadow(0 1px 2px rgba(0,0,0,0.6));
       `;
-      item.appendChild(reelIcon);
+      contentWrapper.appendChild(reelIcon);
 
       // Add view count badge (bottom left)
       const viewBadge = document.createElement('div');
@@ -590,7 +608,7 @@
       viewBadge.appendChild(playIcon);
       viewBadge.appendChild(document.createTextNode(reel.viewsText || reel.views.toLocaleString()));
 
-      item.appendChild(viewBadge);
+      contentWrapper.appendChild(viewBadge);
 
       // Hover overlay with stats
       const hoverOverlay = document.createElement('div');
@@ -658,7 +676,7 @@
         hoverOverlay.appendChild(commentsStat);
       }
 
-      item.appendChild(hoverOverlay);
+      contentWrapper.appendChild(hoverOverlay);
 
       item.onmouseenter = () => {
         hoverOverlay.style.opacity = '1';
@@ -667,14 +685,18 @@
         hoverOverlay.style.opacity = '0';
       };
 
+      // Assemble the structure
+      aspectContainer.appendChild(contentWrapper);
+      item.appendChild(aspectContainer);
+
       grid.appendChild(item);
     });
 
     container.appendChild(grid);
 
-    // Replace main content
-    mainContent.innerHTML = '';
-    mainContent.appendChild(container);
+    // Replace grid container content
+    targetContainer.innerHTML = '';
+    targetContainer.appendChild(container);
 
     console.log('[Reels Sorter] ✅ Injected', sortedReels.length, 'sorted reels into feed');
   }
