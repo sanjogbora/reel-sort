@@ -86,16 +86,75 @@
   // Extract reel data from DOM element
   function extractReelData(element) {
     try {
-      const link = element.querySelector('a[href*="/reel/"]') || 
+      const link = element.querySelector('a[href*="/reel/"]') ||
                    element.querySelector('a[href*="/p/"]');
       if (!link) return null;
-      
+
       const url = link.href;
-      
-      // Try multiple methods to find views
+
+      // Extract thumbnail image - handle lazy loading and multiple sources
+      let thumbnail = '';
+      const imgs = element.querySelectorAll('img');
+
+      for (const img of imgs) {
+        // Skip profile pictures and other non-reel images
+        if (img.alt && img.alt.toLowerCase().includes('profile')) continue;
+
+        // Try multiple sources in order of preference
+        let imgSrc = '';
+
+        // 1. Try srcset (highest quality)
+        if (img.srcset) {
+          const sources = img.srcset.split(',').map(s => {
+            const parts = s.trim().split(' ');
+            return {
+              url: parts[0],
+              width: parseInt(parts[1]) || 0
+            };
+          });
+          // Get highest quality
+          sources.sort((a, b) => b.width - a.width);
+          if (sources.length > 0) {
+            imgSrc = sources[0].url;
+          }
+        }
+
+        // 2. Try regular src
+        if (!imgSrc && img.src && img.src.startsWith('http')) {
+          imgSrc = img.src;
+        }
+
+        // 3. Try data-src (lazy loading)
+        if (!imgSrc && img.dataset.src) {
+          imgSrc = img.dataset.src;
+        }
+
+        // Validate it's a real Instagram image URL
+        if (imgSrc && (imgSrc.includes('cdninstagram') || imgSrc.includes('fbcdn'))) {
+          thumbnail = imgSrc;
+          break;
+        }
+      }
+
+      // Try multiple methods to find views, likes, comments
       let viewsText = '';
       let views = 0;
-      
+      let likesText = '';
+      let likes = 0;
+      let commentsText = '';
+      let comments = 0;
+
+      // Collect all text content
+      const allSpans = element.querySelectorAll('span, div');
+      const textContents = [];
+
+      for (const el of allSpans) {
+        const text = el.textContent.trim();
+        if (text && text.length < 20) { // Reasonable length for stats
+          textContents.push(text);
+        }
+      }
+
       // Method 1: Look for SVG icon followed by text (Instagram's current structure)
       const svgParents = element.querySelectorAll('svg');
       for (const svg of svgParents) {
@@ -106,60 +165,153 @@
             const text = nextSibling.textContent.trim();
             // Check if it's a number with K/M/B suffix
             if (text.match(/^[\d,.]+[KMB]?$/i)) {
-              viewsText = text;
-              views = parseViewCount(text);
-              break;
+              const parsedValue = parseViewCount(text);
+
+              // Heuristic: largest number is likely views, smaller ones are likes/comments
+              if (parsedValue > views) {
+                // Shift current views to likes if new value is larger
+                if (views > 0) {
+                  if (likes === 0) {
+                    likes = views;
+                    likesText = viewsText;
+                  }
+                }
+                views = parsedValue;
+                viewsText = text;
+              } else if (parsedValue > likes) {
+                if (likes > 0 && comments === 0) {
+                  comments = likes;
+                  commentsText = likesText;
+                }
+                likes = parsedValue;
+                likesText = text;
+              } else if (parsedValue > comments) {
+                comments = parsedValue;
+                commentsText = text;
+              }
             }
           }
         }
       }
-      
-      // Method 2: Search all text nodes for "views" or just numbers
+
+      // Method 2: Search all text nodes for numbers
       if (!viewsText) {
-        const allSpans = element.querySelectorAll('span, div');
+        let maxViews = 0;
+        const numbers = [];
+
         for (const el of allSpans) {
           const text = el.textContent.trim();
-          // Match patterns like "7,125" or "5.5K" or "1.2M"
-          if (text.match(/^[\d,.]+[KMB]?$/i) && text.length < 10) {
-            viewsText = text;
-            views = parseViewCount(text);
-            break;
-          }
-          // Also try with "views" text
-          if (text.match(/[\d,.]+[KMB]?\s*(views?|Views?)/i)) {
-            viewsText = text;
-            views = parseViewCount(text);
-            break;
+          // Match patterns like "7,125" or "5.5K" or "1.2M" (exactly, no extra text)
+          if (text.match(/^[\d,]+$/) || text.match(/^[\d,.]+[KMB]$/i)) {
+            const parsedValue = parseViewCount(text);
+            numbers.push({ value: parsedValue, text: text });
           }
         }
-      }
-      
-      // Method 3: Check aria-labels
-      if (!viewsText) {
-        const ariaElements = element.querySelectorAll('[aria-label]');
-        for (const el of ariaElements) {
-          const label = el.getAttribute('aria-label');
-          if (label && label.toLowerCase().includes('views')) {
-            viewsText = label;
-            views = parseViewCount(label);
-            break;
-          }
+
+        // Sort by value descending
+        numbers.sort((a, b) => b.value - a.value);
+
+        // Assign: largest = views, second = likes, third = comments
+        if (numbers.length > 0) {
+          views = numbers[0].value;
+          viewsText = numbers[0].text;
+        }
+        if (numbers.length > 1) {
+          likes = numbers[1].value;
+          likesText = numbers[1].text;
+        }
+        if (numbers.length > 2) {
+          comments = numbers[2].value;
+          commentsText = numbers[2].text;
         }
       }
-      
+
       return {
-        element: element,
         url: url,
         views: views,
-        viewsText: viewsText
+        viewsText: viewsText,
+        likes: likes,
+        likesText: likesText,
+        comments: comments,
+        commentsText: commentsText,
+        thumbnail: thumbnail
       };
     } catch (error) {
       return null;
     }
   }
 
+  // Show loading overlay during collection
+  function showLoadingOverlay() {
+    const overlay = document.createElement('div');
+    overlay.id = 'reels-sorter-loading';
+    overlay.style.cssText = `
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.8);
+      z-index: 99998;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 20px;
+    `;
+
+    const spinner = document.createElement('div');
+    spinner.style.cssText = `
+      width: 50px;
+      height: 50px;
+      border: 4px solid rgba(255, 255, 255, 0.3);
+      border-top-color: white;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    `;
+
+    const text = document.createElement('div');
+    text.id = 'loading-text';
+    text.style.cssText = `
+      color: white;
+      font-size: 16px;
+      font-weight: 500;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    `;
+    text.textContent = 'Collecting reels...';
+
+    const count = document.createElement('div');
+    count.id = 'loading-count';
+    count.style.cssText = `
+      color: rgba(255, 255, 255, 0.7);
+      font-size: 14px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    `;
+    count.textContent = '0 reels found';
+
+    // Add CSS animation
+    const style = document.createElement('style');
+    style.textContent = `
+      @keyframes spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+      }
+    `;
+    document.head.appendChild(style);
+
+    overlay.appendChild(spinner);
+    overlay.appendChild(text);
+    overlay.appendChild(count);
+    document.body.appendChild(overlay);
+
+    return overlay;
+  }
+
   // Auto-scroll and collect reels
   async function autoScrollAndCollect() {
+    const loadingOverlay = showLoadingOverlay();
+    const loadingCount = document.getElementById('loading-count');
+
     return new Promise((resolve) => {
       let lastHeight = 0;
       let scrollAttempts = 0;
@@ -189,13 +341,15 @@
           let parent = link.parentElement;
           for (let i = 0; i < 5; i++) {
             if (!parent) break;
-            
-            if (!parent.dataset.collected) {
-              const data = extractReelData(parent);
-              if (data && data.url && !reelsData.find(r => r.url === data.url)) {
-                reelsData.push(data);
-                parent.dataset.collected = 'true';
+
+            const data = extractReelData(parent);
+            if (data && data.url && !reelsData.find(r => r.url === data.url)) {
+              reelsData.push(data);
+              // Update loading count
+              if (loadingCount) {
+                loadingCount.textContent = `${reelsData.length} reels found`;
               }
+              break; // Found data for this link, move to next
             }
             parent = parent.parentElement;
           }
@@ -217,210 +371,312 @@
         // Stop if reached bottom, max scrolls, or stuck
         if (stuckCount >= 3 || scrollAttempts >= maxScrolls) {
           clearInterval(scrollInterval);
+
+          // Update loading text
+          if (loadingCount) {
+            loadingCount.textContent = `Found ${reelsData.length} reels! Preparing view...`;
+          }
+
+          // Scroll to top and resolve
           window.scrollTo({ top: 0, behavior: 'smooth' });
-          setTimeout(resolve, 500);
+          setTimeout(() => {
+            // Remove loading overlay
+            if (loadingOverlay) {
+              loadingOverlay.remove();
+            }
+            resolve();
+          }, 500);
         }
-        
+
         lastHeight = currentHeight;
       }, 400);
     });
   }
 
-  // Sort and reorder reels in DOM
+  // Inject sorted reels into Instagram's feed area
   function sortReelsByViews() {
     if (reelsData.length === 0) {
       showNotification('No reels found to sort');
       return;
     }
-    
-    // Sort by views descending
-    reelsData.sort((a, b) => b.views - a.views);
-    
-    console.log('[Reels Sorter] Top 5 reels:', reelsData.slice(0, 5).map(r => ({
+
+    // Sort all collected reels by views
+    const sortedReels = [...reelsData].sort((a, b) => b.views - a.views);
+
+    console.log('[Reels Sorter] Sorted', sortedReels.length, 'reels');
+    console.log('[Reels Sorter] Top 5:', sortedReels.slice(0, 5).map(r => ({
       url: r.url.split('/').pop(),
       views: r.views,
       viewsText: r.viewsText
     })));
-    
-    // Strategy: Find individual reel containers (each contains exactly 1 reel)
-    const gridItems = [];
-    const processedUrls = new Set();
-    
-    reelsData.forEach(reel => {
-      if (processedUrls.has(reel.url)) return;
-      processedUrls.add(reel.url);
-      
-      // Use the element we already stored during collection
-      if (!reel.element) {
-        console.log('[Reels Sorter] No element for reel:', reel.url);
-        return;
-      }
-      
-      // Walk up from the stored element to find the individual reel container
-      // This container should have exactly 1 reel link
-      let element = reel.element;
-      let foundContainer = null;
-      
-      for (let i = 0; i < 10; i++) {
-        if (!element) break;
-        
-        // Check if this element contains exactly 1 reel link
-        const reelLinks = element.querySelectorAll('a[href*="/reel/"]');
-        
-        if (reelLinks.length === 1) {
-          // This is an individual reel container
-          foundContainer = element;
-          break;
-        }
-        
-        element = element.parentElement;
-      }
-      
-      if (foundContainer) {
-        gridItems.push({ element: foundContainer, reel: reel });
-      } else {
-        console.log('[Reels Sorter] Could not find container for:', reel.url.split('/').pop());
-      }
-    });
-    
-    console.log('[Reels Sorter] Found grid items:', gridItems.length);
-    
-    if (gridItems.length === 0) {
-      console.log('[Reels Sorter] Trying alternative method...');
-      
-      // Alternative: Find all reel links currently in DOM
-      const allReelLinks = document.querySelectorAll('a[href*="/reel/"]');
-      console.log('[Reels Sorter] Found reel links in DOM:', allReelLinks.length);
-      
-      allReelLinks.forEach(link => {
-        let element = link;
-        
-        for (let i = 0; i < 10; i++) {
-          if (!element) break;
-          
-          const reelLinks = element.querySelectorAll('a[href*="/reel/"]');
-          
-          if (reelLinks.length === 1) {
-            // Find matching reel data
-            const matchingReel = reelsData.find(r => element.querySelector(`a[href="${r.url}"]`));
-            
-            if (matchingReel) {
-              gridItems.push({ element: element, reel: matchingReel });
-            }
-            break;
-          }
-          
-          element = element.parentElement;
-        }
-      });
-      
-      console.log('[Reels Sorter] Alternative method found:', gridItems.length);
-    }
-    
-    if (gridItems.length === 0) {
-      showNotification('⚠️ Could not identify grid items');
+
+    // Find Instagram's main content container
+    const mainContent = document.querySelector('main') || document.querySelector('[role="main"]');
+    if (!mainContent) {
+      console.log('[Reels Sorter] Could not find main content area');
+      showNotification('Could not find Instagram content area');
       return;
     }
-    
-    // Find common parent - EXACT logic from working fixed_sort.js
-    console.log('[Reels Sorter] Finding common parent...');
-    
-    let container = null;
-    let current = gridItems[0].element;
-    
-    for (let level = 0; level < 15; level++) {
-      if (!current) break;
-      
-      // Check how many of our containers this level contains
-      let containsCount = 0;
-      gridItems.forEach(item => {
-        if (current.contains(item.element)) {
-          containsCount++;
-        }
-      });
-      
-      console.log(`[Reels Sorter] Level ${level}: Contains ${containsCount}/${gridItems.length} containers`);
-      
-      // If this level contains all our containers, use it
-      if (containsCount === gridItems.length) {
-        container = current;
-        console.log(`[Reels Sorter] ✓ Found common parent at level ${level}`);
-        break;
-      }
-      
-      current = current.parentElement;
-    }
-    
-    if (!container) {
-      showNotification('⚠️ Could not find common parent');
-      console.log('[Reels Sorter] Failed to find common parent');
-      return;
-    }
-    
-    console.log('[Reels Sorter] Common parent has', container.children.length, 'direct children');
-    
-    // Reorder using remove() and insertBefore() - EXACT logic from working script
-    // Detach all our containers
-    gridItems.forEach(item => {
-      if (item.element.parentElement) {
-        item.element.remove();
-      }
-    });
-    
-    // Find where to insert them back
-    const insertPoint = container.firstChild;
-    
-    // Insert in sorted order
-    gridItems.forEach(item => {
-      if (insertPoint) {
-        container.insertBefore(item.element, insertPoint);
+
+    // Hide original content
+    const originalContent = mainContent.innerHTML;
+    mainContent.dataset.originalContent = originalContent;
+
+    // Create our sorted grid container
+    const container = document.createElement('div');
+    container.id = 'reels-sorter-grid';
+    container.style.cssText = `
+      max-width: 935px;
+      margin: 0 auto;
+      padding: 30px 20px;
+    `;
+
+    // Add header with close button
+    const header = document.createElement('div');
+    header.style.cssText = `
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 28px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid rgb(38, 38, 38);
+    `;
+
+    const title = document.createElement('h2');
+    title.textContent = `Sorted by Views (${sortedReels.length} reels)`;
+    title.style.cssText = `
+      color: rgb(var(--ig-primary-text, 0, 0, 0));
+      font-size: 14px;
+      font-weight: 600;
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    `;
+
+    const closeBtn = document.createElement('button');
+    closeBtn.textContent = 'Show Original';
+    closeBtn.style.cssText = `
+      background: transparent;
+      border: 1px solid rgb(var(--ig-secondary-button-background, 219, 219, 219));
+      color: rgb(var(--ig-primary-text, 0, 0, 0));
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      padding: 7px 16px;
+      border-radius: 8px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      transition: all 0.2s;
+    `;
+    closeBtn.onmouseover = () => {
+      closeBtn.style.background = 'rgba(var(--ig-secondary-button-background, 219, 219, 219), 0.1)';
+    };
+    closeBtn.onmouseout = () => {
+      closeBtn.style.background = 'transparent';
+    };
+    closeBtn.onclick = () => {
+      mainContent.innerHTML = mainContent.dataset.originalContent;
+      delete mainContent.dataset.originalContent;
+    };
+
+    header.appendChild(title);
+    header.appendChild(closeBtn);
+    container.appendChild(header);
+
+    // Create grid (3 columns, matching Instagram)
+    const grid = document.createElement('div');
+    grid.style.cssText = `
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1px;
+    `;
+
+    // Create grid items for each reel
+    sortedReels.forEach((reel, index) => {
+      const item = document.createElement('a');
+      item.href = reel.url;
+      item.style.cssText = `
+        position: relative;
+        display: block;
+        aspect-ratio: 9/16;
+        overflow: hidden;
+        background: rgb(38, 38, 38);
+        cursor: pointer;
+        text-decoration: none;
+      `;
+
+      // Add thumbnail or placeholder
+      if (reel.thumbnail) {
+        const img = document.createElement('img');
+        img.src = reel.thumbnail;
+        img.style.cssText = `
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+          display: block;
+        `;
+        img.onerror = () => {
+          // If image fails to load, show placeholder
+          img.style.display = 'none';
+          item.appendChild(createPlaceholder());
+        };
+        item.appendChild(img);
       } else {
-        container.appendChild(item.element);
+        // No thumbnail - show placeholder
+        item.appendChild(createPlaceholder());
       }
-    });
-    
-    console.log('[Reels Sorter] DOM reordered successfully');
-    console.log('[Reels Sorter] Top 3 after sort:', gridItems.slice(0, 3).map(item => ({
-      views: item.reel.views,
-      text: item.reel.viewsText
-    })));
-    
-    // Add visual indicators to top reels
-    gridItems.slice(0, 3).forEach((item, index) => {
-      const badge = document.createElement('div');
-      badge.textContent = ['🥇', '🥈', '🥉'][index];
-      badge.className = 'sort-medal';
-      badge.style.cssText = `
+
+      // Placeholder function
+      function createPlaceholder() {
+        const placeholder = document.createElement('div');
+        placeholder.style.cssText = `
+          width: 100%;
+          height: 100%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          background: rgb(38, 38, 38);
+        `;
+
+        const reelIconPlaceholder = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        reelIconPlaceholder.setAttribute('width', '48');
+        reelIconPlaceholder.setAttribute('height', '48');
+        reelIconPlaceholder.setAttribute('viewBox', '0 0 24 24');
+        reelIconPlaceholder.setAttribute('fill', 'rgb(115, 115, 115)');
+        reelIconPlaceholder.innerHTML = '<path d="m12.823 1 2.974 5.002h-5.58l-2.65-4.971c.206-.013.419-.022.642-.027L8.55 1Zm2.327 0h.298c3.06 0 4.468.754 5.64 1.887a6.007 6.007 0 0 1 1.596 2.82l.07.295h-4.629L15.15 1Zm-9.667.377L7.95 6.002H1.244a6.01 6.01 0 0 1 3.942-4.53Zm9.735 12.834-4.545-2.624a.909.909 0 0 0-1.356.668l-.008.12v5.248a.91.91 0 0 0 1.255.84l.109-.053 4.545-2.624a.909.909 0 0 0 .1-1.507l-.1-.068-4.545-2.624Zm-14.2-6.209h21.964l.015.36.003.189v6.899c0 3.061-.755 4.469-1.888 5.64-1.151 1.114-2.5 1.856-5.33 1.909l-.334.003H8.551c-3.06 0-4.467-.755-5.64-1.889-1.114-1.15-1.854-2.498-1.908-5.33L1 15.45V8.551l.003-.189Z"></path>';
+
+        placeholder.appendChild(reelIconPlaceholder);
+        return placeholder;
+      }
+
+      // Add reel icon (top right - indicates it's a video)
+      const reelIcon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      reelIcon.setAttribute('width', '18');
+      reelIcon.setAttribute('height', '18');
+      reelIcon.setAttribute('viewBox', '0 0 24 24');
+      reelIcon.setAttribute('fill', 'white');
+      reelIcon.innerHTML = '<path d="m12.823 1 2.974 5.002h-5.58l-2.65-4.971c.206-.013.419-.022.642-.027L8.55 1Zm2.327 0h.298c3.06 0 4.468.754 5.64 1.887a6.007 6.007 0 0 1 1.596 2.82l.07.295h-4.629L15.15 1Zm-9.667.377L7.95 6.002H1.244a6.01 6.01 0 0 1 3.942-4.53Zm9.735 12.834-4.545-2.624a.909.909 0 0 0-1.356.668l-.008.12v5.248a.91.91 0 0 0 1.255.84l.109-.053 4.545-2.624a.909.909 0 0 0 .1-1.507l-.1-.068-4.545-2.624Zm-14.2-6.209h21.964l.015.36.003.189v6.899c0 3.061-.755 4.469-1.888 5.64-1.151 1.114-2.5 1.856-5.33 1.909l-.334.003H8.551c-3.06 0-4.467-.755-5.64-1.889-1.114-1.15-1.854-2.498-1.908-5.33L1 15.45V8.551l.003-.189Z"></path>';
+      reelIcon.style.cssText = `
         position: absolute;
         top: 8px;
+        right: 8px;
+        filter: drop-shadow(0 1px 2px rgba(0,0,0,0.6));
+      `;
+      item.appendChild(reelIcon);
+
+      // Add view count badge (bottom left)
+      const viewBadge = document.createElement('div');
+      viewBadge.style.cssText = `
+        position: absolute;
+        bottom: 8px;
         left: 8px;
-        z-index: 1000;
-        font-size: 28px;
-        background: rgba(0,0,0,0.8);
-        border-radius: 50%;
-        width: 40px;
-        height: 40px;
+        color: white;
+        font-size: 14px;
+        font-weight: 600;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        text-shadow: 0 1px 2px rgba(0,0,0,0.6);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      `;
+
+      // Add play icon
+      const playIcon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      playIcon.setAttribute('width', '14');
+      playIcon.setAttribute('height', '14');
+      playIcon.setAttribute('viewBox', '0 0 24 24');
+      playIcon.setAttribute('fill', 'white');
+      playIcon.innerHTML = '<polygon points="5 3 19 12 5 21 5 3"></polygon>';
+      playIcon.style.cssText = 'filter: drop-shadow(0 1px 2px rgba(0,0,0,0.6));';
+
+      viewBadge.appendChild(playIcon);
+      viewBadge.appendChild(document.createTextNode(reel.viewsText || reel.views.toLocaleString()));
+
+      item.appendChild(viewBadge);
+
+      // Hover overlay with stats
+      const hoverOverlay = document.createElement('div');
+      hoverOverlay.style.cssText = `
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0, 0, 0, 0.3);
         display: flex;
         align-items: center;
         justify-content: center;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.5);
+        gap: 16px;
+        opacity: 0;
+        transition: opacity 0.2s;
+        pointer-events: none;
+        color: white;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
       `;
-      
-      // Find the link container and make it relative
-      const linkContainer = item.element.querySelector('a[href*="/reel/"]');
-      if (linkContainer) {
-        linkContainer.style.position = 'relative';
-        linkContainer.appendChild(badge);
+
+      // Add likes stat
+      if (reel.likes > 0) {
+        const likesStat = document.createElement('div');
+        likesStat.style.cssText = `
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          font-size: 16px;
+          font-weight: 600;
+        `;
+
+        const heartIcon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        heartIcon.setAttribute('width', '19');
+        heartIcon.setAttribute('height', '19');
+        heartIcon.setAttribute('viewBox', '0 0 48 48');
+        heartIcon.setAttribute('fill', 'white');
+        heartIcon.innerHTML = '<path d="M34.6 3.1c-4.5 0-7.9 1.8-10.6 5.6-2.7-3.7-6.1-5.5-10.6-5.5C6 3.1 0 9.6 0 17.6c0 7.3 5.4 12 10.6 16.5.6.5 1.3 1.1 1.9 1.7l2.3 2c4.4 3.9 6.6 5.9 7.6 6.5.5.3 1.1.5 1.6.5s1.1-.2 1.6-.5c1-.6 2.8-2.2 7.8-6.8l2-1.8c.7-.6 1.3-1.2 2-1.7C42.7 29.6 48 25 48 17.6c0-8-6-14.5-13.4-14.5z"></path>';
+
+        likesStat.appendChild(heartIcon);
+        likesStat.appendChild(document.createTextNode(reel.likesText || reel.likes.toLocaleString()));
+        hoverOverlay.appendChild(likesStat);
       }
+
+      // Add comments stat
+      if (reel.comments > 0) {
+        const commentsStat = document.createElement('div');
+        commentsStat.style.cssText = `
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          font-size: 16px;
+          font-weight: 600;
+        `;
+
+        const commentIcon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        commentIcon.setAttribute('width', '19');
+        commentIcon.setAttribute('height', '19');
+        commentIcon.setAttribute('viewBox', '0 0 48 48');
+        commentIcon.setAttribute('fill', 'white');
+        commentIcon.innerHTML = '<path d="M47.5 46.1l-2.8-11c1.8-3.3 2.8-7.1 2.8-11.1C47.5 11 37 .5 24 .5S.5 11 .5 24 11 47.5 24 47.5c4 0 7.8-1 11.1-2.8l11 2.8c.8.2 1.6-.6 1.4-1.4zm-3-22.1c0 4-1 7-2.6 10-.2.4-.3.9-.2 1.4l2.1 8.4-8.3-2.1c-.5-.1-1-.1-1.4.2-1.8 1-5.2 2.6-10 2.6-11.4 0-20.6-9.2-20.6-20.5S12.7 3.5 24 3.5 44.5 12.7 44.5 24z"></path>';
+
+        commentsStat.appendChild(commentIcon);
+        commentsStat.appendChild(document.createTextNode(reel.commentsText || reel.comments.toLocaleString()));
+        hoverOverlay.appendChild(commentsStat);
+      }
+
+      item.appendChild(hoverOverlay);
+
+      item.onmouseenter = () => {
+        hoverOverlay.style.opacity = '1';
+      };
+      item.onmouseleave = () => {
+        hoverOverlay.style.opacity = '0';
+      };
+
+      grid.appendChild(item);
     });
-    
-    console.log('[Reels Sorter] Medals added!');
-    console.log('[Reels Sorter] Top 3 reels:');
-    console.log('🥇', gridItems[0].reel.views, 'views');
-    console.log('🥈', gridItems[1].reel.views, 'views');
-    console.log('🥉', gridItems[2].reel.views, 'views');
-    
-    showNotification(`✅ Sorted ${gridItems.length} reels by views!`);
+
+    container.appendChild(grid);
+
+    // Replace main content
+    mainContent.innerHTML = '';
+    mainContent.appendChild(container);
+
+    console.log('[Reels Sorter] ✅ Injected', sortedReels.length, 'sorted reels into feed');
   }
 
   // Show notification
